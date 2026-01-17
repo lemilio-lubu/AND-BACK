@@ -1,50 +1,65 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
+import { SupabaseService } from '../supabase/supabase.service';
 import { JwtService } from '@nestjs/jwt';
-import { User, UserRole } from '../users/user.entity';
+import { RegisterDto } from './dto/register.dto';
+import { LoginDto } from './dto/login.dto';
+import { UserRole } from '../users/user.types';
 
 @Injectable()
 export class AuthService {
-  private users: User[] = []; // mock temporal
+  constructor(
+    private supabase: SupabaseService,
+    private jwt: JwtService,
+  ) {}
 
-  constructor(private jwtService: JwtService) {}
+  async register(dto: RegisterDto) {
+    const { data, error } = await this.supabase.client.auth.admin.createUser({
+      email: dto.email,
+      password: dto.password,
+      email_confirm: true,
+    });
 
-  async register(email: string, password: string, role: UserRole) {
-    const hashedPassword = await bcrypt.hash(password, 10);
+    if (error) throw error;
 
-    const user: User = {
-      id: crypto.randomUUID(),
-      email,
-      password: hashedPassword,
-      role,
-      isActive: true,
-    };
+    // Crear usuario en tabla users
+    await this.supabase.client.from('users').insert({
+      id: data.user.id,
+      role: dto.role,
+      is_new: true,
+    });
 
-    this.users.push(user);
+    // Inicializar gamificación
+    await this.supabase.client.from('gamificacion_estado').insert({
+      user_id: data.user.id,
+      nivel: 'iniciando',
+      puntos: 0,
+      visible: true,
+    });
 
-    return this.signToken(user);
+    return this.signToken(data.user.id, dto.role);
   }
 
-  async login(email: string, password: string) {
-    const user = this.users.find(u => u.email === email);
+  async login(dto: LoginDto) {
+    const { data, error } =
+      await this.supabase.client.auth.signInWithPassword(dto);
 
-    if (!user) throw new UnauthorizedException();
+    if (error) throw new UnauthorizedException();
 
-    const isValid = await bcrypt.compare(password, user.password);
-    if (!isValid) throw new UnauthorizedException();
+    const { data: user } = await this.supabase.client
+      .from('users')
+      .select('*')
+      .eq('id', data.user.id)
+      .single();
 
-    return this.signToken(user);
+    return this.signToken(user.id, user.role);
   }
 
-  private signToken(user: User) {
-    const payload = {
-      sub: user.id,
-      role: user.role,
-      email: user.email,
-    };
-
+  private signToken(userId: string, role: string) {
     return {
-      access_token: this.jwtService.sign(payload),
+      access_token: this.jwt.sign({
+        sub: userId,
+        role,
+      }),
     };
   }
 }

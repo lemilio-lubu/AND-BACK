@@ -1,6 +1,7 @@
 export enum UserRole {
-  EMPRESA = 'empresa',
-  INFLUENCER = 'influencer',
+  ADMIN = 'admin',          // control total del sistema
+  EMPRESA = 'empresa',      // clientes que facturan
+  INFLUENCER = 'influencer' // solo registro + datos
 }
 
 export class User {
