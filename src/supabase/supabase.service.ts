@@ -12,4 +12,8 @@ export class SupabaseService {
       this.config.get<string>('SUPABASE_SERVICE_ROLE_KEY')!,
     );
   }
+
+  getClient() {
+    return this.client;
+  }
 }

@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { EmpresasModule } from './empresas/empresas.module';
 import { FacturacionModule } from './facturacion/facturacion.module';
 import { GamificacionModule } from './gamificacion/gamificacion.module';
+import { SeedModule } from './seed/seed.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { GamificacionModule } from './gamificacion/gamificacion.module';
     EmpresasModule,
     FacturacionModule,
     GamificacionModule,
+    SeedModule,
   ],
   controllers: [AppController],
   providers: [AppService],
