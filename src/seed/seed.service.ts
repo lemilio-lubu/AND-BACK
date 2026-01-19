@@ -8,34 +8,64 @@ interface SeedCredentials {
   userId: string;
 }
 
+// ✅ USUARIOS (Admin + 3 Empresas)
 const testUsers = [
   {
-    email: 'admin@and.dev',
+    email: 'admin@and.ec',
     password: 'AdminAND123!@#',
     role: 'admin',
-    name: 'Admin AND',
+    label: 'Admin AND',
   },
   {
-    email: 'empresa@and.dev',
-    password: 'EmpresaAND123!@#',
+    email: 'empresa1@techsolutions.ec',
+    password: 'Empresa123!@#',
     role: 'empresa',
-    name: 'Tech Solutions',
+    label: 'Tech Solutions',
   },
   {
-    email: 'influencer@and.dev',
-    password: 'InfluencerAND123!@#',
-    role: 'influencer',
-    name: 'Juan Influencer',
+    email: 'empresa2@marketingcorp.ec',
+    password: 'Empresa123!@#',
+    role: 'empresa',
+    label: 'Marketing Corp',
+  },
+  {
+    email: 'empresa3@startupx.ec',
+    password: 'Empresa123!@#',
+    role: 'empresa',
+    label: 'Startup X',
   },
 ];
 
-const testCompany = {
-  razonSocial: 'Tech Solutions S.A.C.',
-  correoCorporativo: 'contacto@techsolutions.com',
-  ruc: '20123456789',
-  telefono: '+51987654321',
-  ciudad: 'Lima',
-};
+// ✅ EMPRESAS (RUC ecuatoriano válido: 10 dígitos + 001)
+const testCompanies = [
+  {
+    key: 'TECH',
+    razonSocial: 'Tech Solutions S.A.',
+    correo: 'facturacion@techsolutions.ec',
+    ruc: '0912345678001',
+    telefono: '+593987654321',
+    ciudad: 'Quito',
+    userEmail: 'empresa1@techsolutions.ec',
+  },
+  {
+    key: 'MARKETING',
+    razonSocial: 'Marketing Corp S.A.',
+    correo: 'pagos@marketingcorp.ec',
+    ruc: '0923456789001',
+    telefono: '+593987654322',
+    ciudad: 'Guayaquil',
+    userEmail: 'empresa2@marketingcorp.ec',
+  },
+  {
+    key: 'STARTUP',
+    razonSocial: 'Startup X E.I.R.L.',
+    correo: 'admin@startupx.ec',
+    ruc: '0934567890001',
+    telefono: '+593987654323',
+    ciudad: 'Ambato',
+    userEmail: 'empresa3@startupx.ec',
+  },
+];
 
 @Injectable()
 export class SeedService {
@@ -88,12 +118,11 @@ export class SeedService {
     const credentials: SeedCredentials[] = [];
     const createdUserIds: Record<string, string> = {};
 
-    // 1. Crear usuarios de auth y en tabla users
+    // ===== PASO 1: Crear usuarios =====
+    this.logger.log('\n📝 Creando usuarios...');
     for (const testUser of testUsers) {
       try {
-        this.logger.log(`📝 Creando usuario: ${testUser.email}`);
-
-        // Crear en auth
+        // 1. Crear en auth
         const { data, error } = await client.auth.admin.createUser({
           email: testUser.email,
           password: testUser.password,
@@ -103,22 +132,28 @@ export class SeedService {
         if (error) throw error;
 
         const userId = data.user.id;
-        createdUserIds[testUser.role] = userId;
+        createdUserIds[testUser.email] = userId;
 
-        // Crear en tabla users
-        await client.from('users').insert({
+        // 2. Crear en tabla users
+        const { error: userError } = await client.from('users').insert({
           id: userId,
           role: testUser.role,
-          is_new: testUser.role === 'empresa' ? true : false,
+          is_new: testUser.role === 'empresa',
         });
 
-        // Inicializar gamificación
-        await client.from('gamificacion_estado').insert({
-          user_id: userId,
-          nivel: 'iniciando',
-          puntos: 0,
-          visible: testUser.role === 'empresa',
-        });
+        if (userError) throw userError;
+
+        // 3. Inicializar gamificación
+        const { error: gamError } = await client
+          .from('gamificacion_estado')
+          .insert({
+            user_id: userId,
+            nivel: 'iniciando',
+            puntos: 0,
+            visible: testUser.role === 'empresa',
+          });
+
+        if (gamError) throw gamError;
 
         credentials.push({
           email: testUser.email,
@@ -127,92 +162,179 @@ export class SeedService {
           userId: userId,
         });
 
-        this.logger.log(`✅ Usuario creado: ${testUser.email}`);
+        this.logger.log(`✅ Usuario creado: ${testUser.email} (${testUser.label})`);
       } catch (error) {
         this.logger.error(`❌ Error creando usuario ${testUser.email}:`, error);
       }
     }
 
-    // 2. Crear empresa
-    this.logger.log('📋 Creando empresa...');
+    // ===== PASO 2: Crear empresas =====
+    this.logger.log('\n🏢 Creando empresas...');
+    const empresasCreadas: Record<string, string> = {};
+
+    for (const company of testCompanies) {
+      try {
+        const { data: empresa, error } = await client
+          .from('empresas')
+          .insert({
+            razon_social: company.razonSocial,
+            correo_corporativo: company.correo,
+            ruc: company.ruc,
+            telefono: company.telefono,
+            ciudad: company.ciudad,
+            estado_tributario: 'pendiente',
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        empresasCreadas[company.key] = empresa.id;
+
+        // Vincular usuario con empresa
+        const userId = createdUserIds[company.userEmail];
+        if (userId) {
+          await client.from('empresa_users').insert({
+            empresa_id: empresa.id,
+            user_id: userId,
+            role_en_empresa: 'OWNER',
+          });
+        }
+
+        this.logger.log(`✅ Empresa creada: ${company.razonSocial} (RUC: ${company.ruc})`);
+      } catch (error) {
+        this.logger.error(`❌ Error creando empresa ${company.razonSocial}:`, error);
+      }
+    }
+
+    // ===== PASO 3: Crear solicitudes en diferentes estados =====
+    this.logger.log('\n💰 Creando solicitudes de facturación...');
+
+    let requestCount = 0;
+
+    // EMPRESA TECH: REQUEST_CREATED
     try {
-      const { data: empresa, error } = await client
-        .from('empresas')
-        .insert({
-          razon_social: testCompany.razonSocial,
-          correo_corporativo: testCompany.correoCorporativo,
-          ruc: testCompany.ruc,
-          telefono: testCompany.telefono,
-          ciudad: testCompany.ciudad,
-          estado_tributario: 'pendiente',
-        })
-        .select()
-        .single();
+      const empresaId = empresasCreadas['TECH'];
+      const userId = createdUserIds['empresa1@techsolutions.ec'];
 
-      if (error) throw error;
-
-      this.logger.log(`✅ Empresa creada: ${empresa.id}`);
-
-      // 3. Crear relación empresa_users
-      this.logger.log('🔗 Vinculando usuario con empresa...');
-      const empresaUserId = createdUserIds['empresa'];
-
-      await client.from('empresa_users').insert({
-        empresa_id: empresa.id,
-        user_id: empresaUserId,
-        role_en_empresa: 'OWNER',
-      });
-
-      this.logger.log('✅ Usuario empresa vinculado');
-
-      // 4. Crear solicitud de facturación de prueba
-      this.logger.log('💰 Creando solicitud de facturación de ejemplo...');
-
-      const { data: request, error: requestError } = await client
-        .from('facturacion_requests')
-        .insert({
-          empresa_id: empresa.id,
-          plataforma: 'meta',
-          monto_solicitado: 1500.5,
+      if (empresaId && userId) {
+        const { error } = await client.from('facturacion_requests').insert({
+          empresa_id: empresaId,
+          plataforma: 'Meta',
+          monto_solicitado: 1200,
           estado: 'REQUEST_CREATED',
-          created_by: empresaUserId,
-        })
-        .select()
-        .single();
+          created_by: userId,
+        });
 
-      if (requestError) throw requestError;
+        if (error) throw error;
+        requestCount++;
+        this.logger.log(`✅ Solicitud 1: TECH - REQUEST_CREATED (Meta, S/ 1200)`);
+      }
+    } catch (error) {
+      this.logger.error('❌ Error creando solicitud TECH:', error);
+    }
 
-      // Calcular automáticamente
-      const montoSolicitado = 1500.5;
-      const baseCalculada = montoSolicitado / 1.12;
-      const iva = baseCalculada * 0.12;
-      const isd = montoSolicitado * 0.05;
+    // EMPRESA MARKETING: CALCULATED
+    try {
+      const empresaId = empresasCreadas['MARKETING'];
+      const userId = createdUserIds['empresa2@marketingcorp.ec'];
+      const monto = 2000;
 
-      await client
-        .from('facturacion_requests')
-        .update({
+      if (empresaId && userId) {
+        const baseCalculada = monto / 1.12;
+        const iva = baseCalculada * 0.12;
+        const isd = monto * 0.05;
+
+        const { error } = await client.from('facturacion_requests').insert({
+          empresa_id: empresaId,
+          plataforma: 'Google',
+          monto_solicitado: monto,
           base_calculada: baseCalculada,
           iva: iva,
           isd_evitado: isd,
-          total_facturado: montoSolicitado,
+          total_facturado: monto,
           estado: 'CALCULATED',
-        })
-        .eq('id', request.id);
+          created_by: userId,
+        });
 
-      this.logger.log(`✅ Solicitud de facturación creada: ${request.id}`);
+        if (error) throw error;
+        requestCount++;
+        this.logger.log(`✅ Solicitud 2: MARKETING - CALCULATED (Google, S/ 2000)`);
+      }
     } catch (error) {
-      this.logger.error('❌ Error creando empresa:', error);
+      this.logger.error('❌ Error creando solicitud MARKETING:', error);
     }
 
+    // EMPRESA STARTUP: APPROVED_BY_CLIENT
+    try {
+      const empresaId = empresasCreadas['STARTUP'];
+      const userId = createdUserIds['empresa3@startupx.ec'];
+      const monto = 1500;
+
+      if (empresaId && userId) {
+        const baseCalculada = monto / 1.12;
+        const iva = baseCalculada * 0.12;
+        const isd = monto * 0.05;
+
+        const { error } = await client.from('facturacion_requests').insert({
+          empresa_id: empresaId,
+          plataforma: 'TikTok',
+          monto_solicitado: monto,
+          base_calculada: baseCalculada,
+          iva: iva,
+          isd_evitado: isd,
+          total_facturado: monto,
+          estado: 'APPROVED_BY_CLIENT',
+          created_by: userId,
+        });
+
+        if (error) throw error;
+        requestCount++;
+        this.logger.log(`✅ Solicitud 3: STARTUP - APPROVED_BY_CLIENT (TikTok, S/ 1500)`);
+      }
+    } catch (error) {
+      this.logger.error('❌ Error creando solicitud STARTUP:', error);
+    }
+
+    // ===== RESUMEN FINAL =====
+    this.logger.log('\n' + '='.repeat(70));
     this.logger.log('🎉 SEED COMPLETADO EXITOSAMENTE 🎉');
+    this.logger.log('='.repeat(70) + '\n');
+
+    this.logger.log('📝 CREDENCIALES (LOGIN):');
+    this.logger.log('\n🔐 ADMIN (ve todas las solicitudes)');
+    this.logger.log('  Email: admin@and.ec');
+    this.logger.log('  Password: AdminAND123!@#\n');
+
+    this.logger.log('🏢 EMPRESA 1 - Tech Solutions');
+    this.logger.log('  Email: empresa1@techsolutions.ec');
+    this.logger.log('  Password: Empresa123!@#');
+    this.logger.log('  RUC: 0912345678001\n');
+
+    this.logger.log('🏢 EMPRESA 2 - Marketing Corp');
+    this.logger.log('  Email: empresa2@marketingcorp.ec');
+    this.logger.log('  Password: Empresa123!@#');
+    this.logger.log('  RUC: 0923456789001\n');
+
+    this.logger.log('🏢 EMPRESA 3 - Startup X');
+    this.logger.log('  Email: empresa3@startupx.ec');
+    this.logger.log('  Password: Empresa123!@#');
+    this.logger.log('  RUC: 0934567890001\n');
+
+    this.logger.log('📊 DATOS CREADOS:');
+    this.logger.log(`  ✅ Usuarios: ${credentials.length}`);
+    this.logger.log(`  ✅ Empresas: ${Object.keys(empresasCreadas).length}`);
+    this.logger.log(`  ✅ Solicitudes: ${requestCount}\n`);
+
+    this.logger.log('='.repeat(70));
 
     return {
       message: 'Seed completado exitosamente',
       credentials,
       stats: {
         usuariosCreados: credentials.length,
-        empresasCreadas: 1,
-        solicitudesFacturacion: 1,
+        empresasCreadas: Object.keys(empresasCreadas).length,
+        solicitudesFacturacion: requestCount,
         gamificacionRegistros: credentials.length,
       },
     };

@@ -31,13 +31,32 @@ const testUsers = [
   },
 ];
 
-const testCompany = {
-  razonSocial: 'Tech Solutions S.A.C.',
-  correoCorporativo: 'contacto@techsolutions.com',
-  ruc: '20123456789',
-  telefono: '+51987654321',
-  ciudad: 'Lima',
-};
+const testCompanies = [
+  { razonSocial: 'Tech Solutions S.A.C.', correo: 'contacto@techsolutions.com', ruc: '20123456789', telefono: '+51987654321', ciudad: 'Lima' },
+  { razonSocial: 'Digital Marketing Pro', correo: 'info@digimarket.com', ruc: '20234567890', telefono: '+51987654322', ciudad: 'Lima' },
+  { razonSocial: 'Social Media Agency', correo: 'contact@socialmedia.com', ruc: '20345678901', telefono: '+51987654323', ciudad: 'Arequipa' },
+  { razonSocial: 'Creative Minds LLC', correo: 'hello@creativeminds.com', ruc: '20456789012', telefono: '+51987654324', ciudad: 'Lima' },
+  { razonSocial: 'Data Analytics Corp', correo: 'support@dataanalytics.com', ruc: '20567890123', telefono: '+51987654325', ciudad: 'Trujillo' },
+  { razonSocial: 'Cloud Services Inc', correo: 'info@cloudservices.com', ruc: '20678901234', telefono: '+51987654326', ciudad: 'Lima' },
+  { razonSocial: 'E-commerce Solutions', correo: 'sales@ecommerce.com', ruc: '20789012345', telefono: '+51987654327', ciudad: 'Cusco' },
+  { razonSocial: 'Brand Development', correo: 'team@branddev.com', ruc: '20890123456', telefono: '+51987654328', ciudad: 'Lima' },
+  { razonSocial: 'Influencer Network', correo: 'network@influencers.com', ruc: '20901234567', telefono: '+51987654329', ciudad: 'Lima' },
+  { razonSocial: 'Content Creator Hub', correo: 'hub@contentcreator.com', ruc: '20012345678', telefono: '+51987654330', ciudad: 'Piura' },
+  { razonSocial: 'Marketing Automation', correo: 'auto@marketing.com', ruc: '20112345679', telefono: '+51987654331', ciudad: 'Lima' },
+  { razonSocial: 'SEO Experts Group', correo: 'seo@experts.com', ruc: '20212345680', telefono: '+51987654332', ciudad: 'Lima' },
+  { razonSocial: 'Video Production Co', correo: 'video@production.com', ruc: '20312345681', telefono: '+51987654333', ciudad: 'Iquitos' },
+  { razonSocial: 'Mobile App Dev', correo: 'dev@mobileapp.com', ruc: '20412345682', telefono: '+51987654334', ciudad: 'Lima' },
+  { razonSocial: 'Design Studio Pro', correo: 'design@studio.com', ruc: '20512345683', telefono: '+51987654335', ciudad: 'Tacna' },
+  { razonSocial: 'AI Solutions Ltd', correo: 'ai@solutions.com', ruc: '20612345684', telefono: '+51987654336', ciudad: 'Lima' },
+  { razonSocial: 'Blockchain Startup', correo: 'info@blockchain.com', ruc: '20712345685', telefono: '+51987654337', ciudad: 'Lima' },
+  { razonSocial: 'Consulting Group', correo: 'consult@group.com', ruc: '20812345686', telefono: '+51987654338', ciudad: 'Ayacucho' },
+  { razonSocial: 'Finance Tech Inc', correo: 'fintech@inc.com', ruc: '20912345687', telefono: '+51987654339', ciudad: 'Lima' },
+  { razonSocial: 'Education Platform', correo: 'edu@platform.com', ruc: '20013456788', telefono: '+51987654340', ciudad: 'Lima' },
+  { razonSocial: 'Healthcare Solutions', correo: 'health@solutions.com', ruc: '20113456789', telefono: '+51987654341', ciudad: 'Junín' },
+  { razonSocial: 'Real Estate Tech', correo: 'real@estate.com', ruc: '20213456790', telefono: '+51987654342', ciudad: 'Lima' },
+];
+
+const plataformas = ['Meta', 'Google', 'TikTok', 'X'];
 
 async function cleanDatabase() {
   console.log('🧹 Limpiando base de datos...');
@@ -110,71 +129,82 @@ async function seedDatabase() {
     }
   }
 
-  console.log('\n📋 Creando empresa...');
-  try {
-    const { data: empresa, error } = await supabase
-      .from('empresas')
-      .insert({
-        razon_social: testCompany.razonSocial,
-        correo_corporativo: testCompany.correoCorporativo,
-        ruc: testCompany.ruc,
-        telefono: testCompany.telefono,
-        ciudad: testCompany.ciudad,
-        estado_tributario: 'pendiente',
-      })
-      .select()
-      .single();
+  console.log('\n📋 Creando empresas y solicitudes de facturación...');
+  
+  let createdCompanies = 0;
+  let createdRequests = 0;
+  const empresaUserId = createdUserIds['empresa'];
 
-    if (error) throw error;
+  for (const company of testCompanies) {
+    try {
+      const { data: empresa, error } = await supabase
+        .from('empresas')
+        .insert({
+          razon_social: company.razonSocial,
+          correo_corporativo: company.correo,
+          ruc: company.ruc,
+          telefono: company.telefono,
+          ciudad: company.ciudad,
+          estado_tributario: 'pendiente',
+        })
+        .select()
+        .single();
 
-    console.log(`✅ Empresa creada: ${empresa.id}`);
+      if (error) throw error;
 
-    console.log('\n🔗 Vinculando usuario con empresa...');
-    const empresaUserId = createdUserIds['empresa'];
+      createdCompanies++;
 
-    await supabase.from('empresa_users').insert({
-      empresa_id: empresa.id,
-      user_id: empresaUserId,
-      role_en_empresa: 'OWNER',
-    });
-
-    console.log(`✅ Usuario empresa vinculado`);
-
-    console.log('\n💰 Creando solicitud de facturación de ejemplo...');
-
-    const { data: request, error: requestError } = await supabase
-      .from('facturacion_requests')
-      .insert({
+      // Vincular usuario con empresa
+      await supabase.from('empresa_users').insert({
         empresa_id: empresa.id,
-        plataforma: 'meta',
-        monto_solicitado: 1500.5,
-        estado: 'REQUEST_CREATED',
-        created_by: empresaUserId,
-      })
-      .select()
-      .single();
+        user_id: empresaUserId,
+        role_en_empresa: 'OWNER',
+      });
 
-    if (requestError) throw requestError;
+      // Crear 2-3 solicitudes de facturación por empresa
+      const numRequests = Math.floor(Math.random() * 2) + 2; // 2-3 solicitudes
 
-    const montoSolicitado = 1500.5;
-    const baseCalculada = montoSolicitado / 1.12;
-    const iva = baseCalculada * 0.12;
-    const isd = montoSolicitado * 0.05;
+      for (let i = 0; i < numRequests; i++) {
+        const plataforma = plataformas[Math.floor(Math.random() * plataformas.length)];
+        const monto = Math.floor(Math.random() * 5000) + 500; // 500-5500
 
-    await supabase
-      .from('facturacion_requests')
-      .update({
-        base_calculada: baseCalculada,
-        iva: iva,
-        isd_evitado: isd,
-        total_facturado: montoSolicitado,
-        estado: 'CALCULATED',
-      })
-      .eq('id', request.id);
+        const { data: request, error: requestError } = await supabase
+          .from('facturacion_requests')
+          .insert({
+            empresa_id: empresa.id,
+            plataforma: plataforma,
+            monto_solicitado: monto,
+            estado: 'REQUEST_CREATED',
+            created_by: empresaUserId,
+          })
+          .select()
+          .single();
 
-    console.log(`✅ Solicitud de facturación creada: ${request.id}`);
-  } catch (error) {
-    console.error('❌ Error creando empresa:', error);
+        if (requestError) throw requestError;
+
+        // Calcular automáticamente
+        const baseCalculada = monto / 1.12;
+        const iva = baseCalculada * 0.12;
+        const isd = monto * 0.05;
+
+        await supabase
+          .from('facturacion_requests')
+          .update({
+            base_calculada: baseCalculada,
+            iva: iva,
+            isd_evitado: isd,
+            total_facturado: monto,
+            estado: 'CALCULATED',
+          })
+          .eq('id', request.id);
+
+        createdRequests++;
+      }
+
+      console.log(`✅ Empresa creada: ${company.razonSocial} (RUC: ${company.ruc})`);
+    } catch (error) {
+      console.error(`❌ Error creando empresa ${company.razonSocial}:`, error);
+    }
   }
 
   console.log('\n' + '='.repeat(70));
@@ -196,15 +226,19 @@ async function seedDatabase() {
   console.log('   { "email": "admin@and.dev", "password": "AdminAND123!@#" }\n');
   console.log('3. Ir a http://localhost:3001/api/docs\n');
   console.log('4. Hacer clic en "Authorize" y pegar el JWT token\n');
-  console.log('5. Probar endpoints (incluyendo POST /seed)\n');
+  console.log('5. Probar endpoints\n');
 
   console.log('📊 DATOS CREADOS:\n');
   console.log(`✅ Usuarios: ${credentials.length}`);
-  console.log(`✅ Empresa: 1 (Tech Solutions S.A.C.)`);
-  console.log(`✅ Solicitud de facturación: 1 (estado: CALCULATED)`);
+  console.log(`✅ Empresas: ${createdCompanies}`);
+  console.log(`✅ Solicitudes de facturación: ${createdRequests}`);
   console.log(`✅ Gamificación: ${credentials.length} registros\n`);
 
-  console.log('💡 EJECUTAR SEED DESDE LA API:\n');
+  console.log('💡 NOTAS:\n');
+  console.log(`- Todas las empresas están vinculadas al usuario: ${credentials[1].email}`);
+  console.log(`- El admin (${credentials[0].email}) puede ver todas las solicitudes`);
+  console.log(`- Cada empresa tiene 2-3 solicitudes de facturación`);
+  console.log(`- Los montos son aleatorios entre S/ 500 y S/ 5500\n`);
   console.log('POST /seed (protegido con JWT - solo ADMIN)\n');
   console.log('='.repeat(70));
 }

@@ -2,10 +2,10 @@ import { IsEnum, IsNumber, IsUUID, Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export enum Plataforma {
-  META = 'meta',
-  TIKTOK = 'tiktok',
-  GOOGLE = 'google',
-  OTRO = 'otro',
+  Meta = 'Meta',
+  Google = 'Google',
+  TikTok = 'TikTok',
+  X = 'X',
 }
 
 export enum FacturacionEstado {
@@ -28,7 +28,7 @@ export class CreateRequestDto {
 
   @ApiProperty({
     enum: Plataforma,
-    example: Plataforma.META,
+    example: Plataforma.Meta,
     description: 'Plataforma de donde provienen los ingresos',
   })
   @IsEnum(Plataforma)
