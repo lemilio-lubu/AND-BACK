@@ -448,7 +448,7 @@ export class FacturacionService {
 
       // Activas
       if (
-        !['COMPLETED', 'PAID', 'ERROR', 'CANCELLED'].includes(req.estado)
+        !['COMPLETED', 'ERROR', 'CANCELLED'].includes(req.estado)
       ) {
         activeCount++;
       }
