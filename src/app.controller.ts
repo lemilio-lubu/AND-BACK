@@ -46,8 +46,19 @@ export class AppController {
   })
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  me(@GetUser() user: any) {
-    return user;
+  async me(@GetUser() user: any) {
+    console.log('🔐 [/me] Usuario del token JWT:', user);
+    console.log('🔐 [/me] userId extraído:', user.userId);
+    return this.appService.getProfile(user.userId);
+  }
+
+  @ApiOperation({
+    summary: 'Debug: Verificar conexión Supabase',
+    description: 'Endpoint de debug para verificar que Supabase funcione correctamente',
+  })
+  @Get('debug/supabase')
+  async debugSupabase() {
+    return this.appService.debugSupabase();
   }
 
   @ApiBearerAuth('JWT-auth')

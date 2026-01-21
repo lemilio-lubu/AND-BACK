@@ -5,6 +5,7 @@ import {
   Param,
   Post,
   Put,
+  Patch,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -27,157 +28,75 @@ import { UserRole } from '../users/user.types';
 @ApiTags('facturacion')
 @ApiBearerAuth('JWT-auth')
 @Controller('facturacion')
+@UseGuards(JwtAuthGuard, RolesGuard) // Global Guard
 export class FacturacionController {
   constructor(private facturacionService: FacturacionService) {}
 
-  @ApiOperation({
-    summary: 'Crear solicitud de facturación',
-    description: 'Empresa crea solicitud para facturar ingresos de una plataforma',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Solicitud creada y calculada automáticamente',
-    schema: {
-      example: {
-        id: '456f1234-e89b-12d3-a456-426614174001',
-        empresa_id: '123e4567-e89b-12d3-a456-426614174000',
-        plataforma: 'meta',
-        monto_solicitado: 1500.5,
-        base_calculada: 1339.93,
-        iva: 160.79,
-        isd_evitado: 75.03,
-        total_facturado: 1500.5,
-        estado: 'CALCULATED',
-        created_at: '2026-01-17T10:30:00Z',
-      },
-    },
-  })
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  // --- DASHBOARD ---
+  @ApiOperation({ summary: 'Obtener métricas para Dashboard' })
+  @ApiResponse({ status: 200, description: 'Datos del dashboard' })
+  @Roles(UserRole.EMPRESA, UserRole.ADMIN)
+  @Get('dashboard')
+  getDashboard(@GetUser() user: any) {
+    return this.facturacionService.getDashboardStats(user.userId, user.role);
+  }
+
+  // --- EMPRESA ---
+
+  @ApiOperation({ summary: '1. Empresa envía solicitud' })
+  @ApiResponse({ status: 201, description: 'Solicitud creada' })
   @Roles(UserRole.EMPRESA)
-  @Post('request')
+  @Post()
   createRequest(@Body() dto: CreateRequestDto, @GetUser() user: any) {
     return this.facturacionService.createRequest(dto, user.userId);
   }
 
-  @ApiOperation({
-    summary: 'Aprobar solicitud',
-    description: 'Empresa aprueba su solicitud de facturación',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Solicitud aprobada por cliente',
-    schema: {
-      example: {
-        id: '456f1234-e89b-12d3-a456-426614174001',
-        estado: 'APPROVED_BY_CLIENT',
-      },
-    },
-  })
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.EMPRESA)
-  @Put('approve')
-  approveRequest(@Body() dto: ApproveRequestDto, @GetUser() user: any) {
-    return this.facturacionService.approveRequest(dto.requestId, user.userId);
-  }
-
-  @ApiOperation({
-    summary: 'Mis solicitudes de facturación',
-    description: 'Obtiene todas las solicitudes de facturación de la empresa del usuario',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de solicitudes',
-    isArray: true,
-    schema: {
-      example: [
-        {
-          id: '456f1234-e89b-12d3-a456-426614174001',
-          plataforma: 'meta',
-          monto_solicitado: 1500.5,
-          estado: 'APPROVED_BY_CLIENT',
-          created_at: '2026-01-17T10:30:00Z',
-        },
-      ],
-    },
-  })
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.EMPRESA)
+  @ApiOperation({ summary: 'Listar mis solicitudes' })
+  @ApiResponse({ status: 200, isArray: true })
+  @Roles(UserRole.EMPRESA, UserRole.ADMIN)
   @Get('mine')
-  getMine(@GetUser() user: any) {
+  getMyRequests(@GetUser() user: any) {
+    if (user.role === UserRole.ADMIN) {
+      return this.facturacionService.findAll();
+    }
     return this.facturacionService.findByUserId(user.userId);
   }
 
-  @ApiOperation({
-    summary: 'Ver todas las solicitudes',
-    description: 'Admin obtiene todas las solicitudes de facturación del sistema',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de todas las solicitudes',
-    isArray: true,
-  })
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @ApiOperation({ summary: '3. Empresa aprueba el valor calculado' })
+  @ApiResponse({ status: 200, description: 'Aprobado por cliente' })
+  @Roles(UserRole.EMPRESA)
+  @Patch(':id/approve')
+  approveRequest(@Param('id') id: string, @GetUser() user: any) {
+    return this.facturacionService.approveRequest(id, user.userId);
+  }
+
+  // --- ADMIN ---
+
+  @ApiOperation({ summary: 'Listar todas las solicitudes (Admin)' })
+  @Get('admin/all')
   @Roles(UserRole.ADMIN)
-  @Get('all')
-  getAll() {
+  getAllRequests() {
     return this.facturacionService.findAll();
   }
 
-  @ApiOperation({
-    summary: 'Emitir factura',
-    description: 'Admin emite la factura y marca como primera factura si aplica',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'ID de la solicitud',
-    example: '456f1234-e89b-12d3-a456-426614174001',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Factura emitida exitosamente',
-  })
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @ApiOperation({ summary: '4. Admin emite factura' })
+  @Patch(':id/emit-invoice')
   @Roles(UserRole.ADMIN)
-  @Put(':id/invoice')
-  invoice(@Param('id') id: string, @GetUser() user: any) {
-    return this.facturacionService.invoiceRequest(id, user.userId);
+  emitInvoice(@Param('id') id: string, @GetUser() user: any) {
+    return this.facturacionService.emitInvoice(id, user.userId);
   }
 
-  @ApiOperation({
-    summary: 'Marcar como pagado',
-    description: 'Admin marca la factura como pagada',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'ID de la solicitud',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Factura marcada como pagada',
-  })
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @ApiOperation({ summary: '5. Admin confirma pago recibido' })
+  @Patch(':id/confirm-payment')
   @Roles(UserRole.ADMIN)
-  @Put(':id/paid')
-  markAsPaid(@Param('id') id: string, @GetUser() user: any) {
-    return this.facturacionService.markAsPaid(id, user.userId);
+  confirmPayment(@Param('id') id: string, @GetUser() user: any) {
+    return this.facturacionService.confirmPayment(id, user.userId);
   }
 
-  @ApiOperation({
-    summary: 'Completar solicitud',
-    description: 'Admin finaliza el proceso de facturación',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'ID de la solicitud',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Solicitud completada',
-  })
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @ApiOperation({ summary: '6. Admin completa la recarga y finaliza orden' })
+  @Patch(':id/complete')
   @Roles(UserRole.ADMIN)
-  @Put(':id/complete')
-  complete(@Param('id') id: string, @GetUser() user: any) {
-    return this.facturacionService.completeRequest(id, user.userId);
+  completeOrder(@Param('id') id: string, @GetUser() user: any) {
+    return this.facturacionService.completeOrder(id, user.userId);
   }
 }

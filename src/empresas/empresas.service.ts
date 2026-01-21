@@ -41,11 +41,10 @@ export class EmpresasService {
     const { data, error } = await this.supabase.client
       .from('empresa_users')
       .select('empresa_id, empresas(*)')
-      .eq('user_id', userId)
-      .single();
+      .eq('user_id', userId);
 
     if (error) throw error;
-    return data;
+    return data && data.length > 0 ? data[0] : null;
   }
 
   async findById(empresaId: string) {
