@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreateRequestDto, FacturacionEstado } from './dto/create-request.dto';
 import { DashboardStatsResponse } from './dto/dashboard-stats.dto';
@@ -9,15 +10,30 @@ export class FacturacionService {
   constructor(
     private supabase: SupabaseService,
     private gamificacion: GamificacionService,
+    private configService: ConfigService,
   ) {}
+
+  private getLocalClient() {
+    const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
+    const serviceRoleKey = this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY');
+    
+    // --- CLIENTE LOCAL (ROBUST DEPLOY) ---
+    const { createClient } = require('@supabase/supabase-js');
+    return createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false }
+    });
+    // -------------------------------------
+  }
 
   // 1. Envías tu solicitud
   async createRequest(dto: CreateRequestDto, userId: string) {
+    const localClient = this.getLocalClient();
+
     let empresaId = dto.empresaId;
 
     // Si no viene ID de empresa, buscar la del usuario logueado
     if (!empresaId) {
-      const { data: relations, error } = await this.supabase.client
+      const { data: relations, error } = await localClient
         .from('empresa_users')
         .select('empresa_id')
         .eq('user_id', userId);
@@ -35,7 +51,7 @@ export class FacturacionService {
       empresaId = relation.empresa_id;
     }
 
-    const { data, error } = await this.supabase.client
+    const { data, error } = await localClient
       .from('facturacion_requests')
       .insert({
         empresa_id: empresaId,
@@ -52,18 +68,23 @@ export class FacturacionService {
         throw new BadRequestException('Error al crear la solicitud: ' + error.message);
     }
 
-    // 2. AND calcula el monto final (Automático)
-    return await this.calculateRequest(data.id);
+    // 2. AND calcula el monto final (Manual por Admin)
+    // return await this.calculateRequest(data.id);
+    return data;
   }
 
   async calculateRequest(requestId: string) {
-    const { data: request, error } = await this.supabase.client
+    const localClient = this.getLocalClient();
+    const { data: request, error } = await localClient
       .from('facturacion_requests')
       .select('*')
       .eq('id', requestId)
       .single();
 
-    if (error) throw error;
+    if (error) {
+        console.error('Error finding request to calculate:', error);
+        throw new NotFoundException('Solicitud no encontrada');
+    }
 
     const montoSolicitado = parseFloat(request.monto_solicitado);
     const baseCalculada = montoSolicitado / 1.12; 
@@ -71,7 +92,7 @@ export class FacturacionService {
     const isd = montoSolicitado * 0.05; 
     const totalFacturado = montoSolicitado;
 
-    const { data: updated, error: updateError } = await this.supabase.client
+    const { data: updated, error: updateError } = await localClient
       .from('facturacion_requests')
       .update({
         base_calculada: baseCalculada,
@@ -99,8 +120,9 @@ export class FacturacionService {
 
   // 3. Apruebas el valor (Cliente)
   async approveRequest(requestId: string, userId: string) {
+    const localClient = this.getLocalClient();
     // Validar estado actual antes de aprobar
-    const { data: request } = await this.supabase.client
+    const { data: request } = await localClient
         .from('facturacion_requests')
         .select('*')
         .eq('id', requestId)
@@ -123,17 +145,30 @@ export class FacturacionService {
     return this.updateEstado(requestId, FacturacionEstado.INVOICED, adminId);
   }
 
-  // 5. Realizas el pago -> AND verifica pago (Admin)
+  // 5. Realizas el pago (Empresa)
+  async payRequest(requestId: string, userId: string) {
+      // Validar que sea dueño de la solicitud
+      const request = await this.validateOwnership(requestId, userId);
+
+      if (request.estado !== FacturacionEstado.INVOICED) {
+          throw new BadRequestException('Solo se pueden pagar solicitudes facturadas (INVOICED).');
+      }
+
+      return this.updateEstado(requestId, FacturacionEstado.PAID, userId);
+  }
+
+  // Helper para Admin: Confirmar pago (Legacy o alternativo)
   async confirmPayment(requestId: string, adminId: string) {
     return this.updateEstado(requestId, FacturacionEstado.PAID, adminId);
   }
 
   // 6. AND ejecuta la recarga (Admin - Final)
   async completeOrder(requestId: string, adminId: string) {
+    const localClient = this.getLocalClient();
     const result = await this.updateEstado(requestId, FacturacionEstado.COMPLETED, adminId);
     
     // Gamificación: primera factura completada
-    const { data: req } = await this.supabase.client
+    const { data: req } = await localClient
         .from('facturacion_requests')
         .select('created_by')
         .eq('id', requestId)
@@ -148,12 +183,17 @@ export class FacturacionService {
 
   // Helper para Admin: Listar todas
   async findAll() {
-    const { data, error } = await this.supabase.client
+    const localClient = this.getLocalClient();
+
+    const { data, error } = await localClient
       .from('facturacion_requests')
       .select('*, empresas(*)')
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+        console.error('Error in findAll (Admin):', error);
+        throw error;
+    }
     
     // Mapeo seguro para el frontend
     return data.map(req => ({
@@ -165,7 +205,9 @@ export class FacturacionService {
 
   // Helper para Empresa: Listar propias
   async findByUserId(userId: string) {
-    const { data: relations } = await this.supabase.client
+    const localClient = this.getLocalClient();
+
+    const { data: relations } = await localClient
       .from('empresa_users')
       .select('empresa_id')
       .eq('user_id', userId);
@@ -174,25 +216,47 @@ export class FacturacionService {
 
     if (!empresaUser) return [];
 
-    const { data, error } = await this.supabase.client
+    const { data, error } = await localClient
       .from('facturacion_requests')
       .select('*')
       .eq('empresa_id', empresaUser.empresa_id)
       .order('created_at', { ascending: false });
+      
+    if (error) {
+        console.error('Error in findByUserId:', error);
+        throw error;
+    }
 
-    if (error) throw error;
-    
-    // Mapeo seguro para el frontend
-    return data.map(req => ({
-        ...req,
-        monto: req.total_facturado ? parseFloat(req.total_facturado) : parseFloat(req.monto_solicitado),
-        fecha: req.created_at
-    }));
+    return data;
+  }
+
+  private async validateOwnership(requestId: string, userId: string) {
+      const localClient = this.getLocalClient();
+      const { data: request } = await localClient
+          .from('facturacion_requests')
+          .select('*, empresas(id, empresa_users(user_id))') // Join complejo, simplifiquemos
+          .eq('id', requestId)
+          .single();
+      
+      if (!request) throw new NotFoundException('Solicitud no encontrada');
+
+      // Verificación simple por ahora: buscar empresa del usuario y comparar
+      const { data: relations } = await localClient
+          .from('empresa_users')
+          .select('empresa_id')
+          .eq('user_id', userId)
+          .single();
+          
+      if (!relations || relations.empresa_id !== request.empresa_id) {
+          throw new BadRequestException('No tienes permiso para operar esta solicitud');
+      }
+      return request;
   }
 
   // Helper Genérico para cambio de estados
   private async updateEstado(requestId: string, nuevoEstado: FacturacionEstado, actorId: string) {
-    const { data: request } = await this.supabase.client
+    const localClient = this.getLocalClient();
+    const { data: request } = await localClient
        .from('facturacion_requests')
        .select('estado')
        .eq('id', requestId)
@@ -201,7 +265,7 @@ export class FacturacionService {
     if (!request) throw new NotFoundException('Solicitud no encontrada');
     const oldEstado = request.estado;
 
-    const { data, error } = await this.supabase.client
+    const { data, error } = await localClient
       .from('facturacion_requests')
       .update({
         estado: nuevoEstado,
@@ -223,7 +287,8 @@ export class FacturacionService {
     newEstado: FacturacionEstado,
     actor: string | null,
   ) {
-    await this.supabase.client.from('facturacion_audit_log').insert({
+    const localClient = this.getLocalClient();
+    await localClient.from('facturacion_audit_log').insert({
       request_id: requestId,
       old_estado: oldEstado,
       new_estado: newEstado,
@@ -236,13 +301,14 @@ export class FacturacionService {
   async getDashboardStats(userId: string, role?: string): Promise<DashboardStatsResponse> {
     console.log(`🔍 Consultando Dashboard para UserID: ${userId} (Role: ${role})`);
 
+    const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
+    const serviceRoleKey = this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY');
+
     // --- CLIENTE LOCAL PARA DASHBOARD ---
     const { createClient } = require('@supabase/supabase-js');
-    const localClient = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY,
-      { auth: { persistSession: false } }
-    );
+    const localClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false }
+    });
     // ------------------------------------
 
     // CASO ADMIN: Ver todo globalmente
@@ -469,5 +535,103 @@ export class FacturacionService {
         weeklyTrend: [],
       },
     };
+  }
+
+  // --- PDF GENERATION ---
+  async generateInvoicePdf(requestId: string): Promise<Buffer> {
+    const PDFDocument = require('pdfkit');
+    const localClient = this.getLocalClient();
+    
+    // 1. Obtener datos
+    const { data: request, error } = await localClient
+      .from('facturacion_requests')
+      .select('*, empresas(*)')
+      .eq('id', requestId)
+      .single();
+
+    if (error || !request) {
+        throw new NotFoundException('Factura no encontrada');
+    }
+
+    if (!request.total_facturado && request.estado !== FacturacionEstado.INVOICED && request.estado !== FacturacionEstado.PAID && request.estado !== FacturacionEstado.COMPLETED) {
+        // Permitir descargar proforma o throw error?
+        // Asumiremos que solo se descarga si ya se calculó o emitió
+        if (request.estado === FacturacionEstado.REQUEST_CREATED) {
+            throw new BadRequestException('La solicitud aún no ha sido procesada.');
+        }
+    }
+
+    return new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        const buffers: Buffer[] = [];
+
+        doc.on('data', buffers.push.bind(buffers));
+        doc.on('end', () => {
+            const pdfData = Buffer.concat(buffers);
+            resolve(pdfData);
+        });
+        doc.on('error', reject);
+
+        // --- CONTENIDO PDF ---
+        
+        // Header
+        doc.fontSize(20).text('AND - Factura Electrónica', { align: 'center' });
+        doc.moveDown();
+        doc.fontSize(12).text(`ID Solicitud: ${request.id}`, { align: 'right' });
+        doc.text(`Fecha Emisión: ${new Date().toLocaleDateString()}`, { align: 'right' });
+        
+        doc.moveDown();
+        doc.text(`Estado: ${request.estado.toUpperCase()}`, { align: 'right' });
+
+        doc.moveDown();
+        
+        // Datos Empresa
+        doc.fontSize(14).text('Datos del Cliente:', { underline: true });
+        doc.fontSize(10);
+        doc.text(`Razón Social: ${request.empresas?.razon_social || 'N/A'}`);
+        doc.text(`RUC: ${request.empresas?.ruc || 'N/A'}`);
+        doc.text(`Dirección: ${request.empresas?.direccion || request.empresas?.ciudad || 'N/A'}`);
+        doc.text(`Email: ${request.empresas?.correo || 'N/A'}`);
+
+        doc.moveDown(2);
+
+        // Tabla de Valores
+        doc.fontSize(14).text('Detalle de Facturación:', { underline: true });
+        doc.moveDown();
+
+        const tableTop = doc.y;
+        const itemX = 50;
+        const amountX = 400;
+
+        doc.fontSize(10);
+        
+        // Header Tabla
+        doc.text('Concepto', itemX, tableTop, { bold: true });
+        doc.text('Monto (USD)', amountX, tableTop, { bold: true });
+        
+        let y = tableTop + 20;
+        
+        // Rows
+        const rows = [
+            { label: 'Monto Solicitado (Recarga)', value: request.monto_solicitado },
+            { label: 'Base Imponible', value: request.base_calculada },
+            { label: 'IVA (12%)', value: request.iva },
+            { label: 'Total Facturado', value: request.total_facturado }
+        ];
+
+        rows.forEach(row => {
+            if (row.value) {
+                doc.text(row.label, itemX, y);
+                doc.text(`$ ${parseFloat(row.value.toString()).toFixed(2)}`, amountX, y);
+                y += 20;
+            }
+        });
+
+        // Footer
+        doc.moveDown(4);
+        doc.fontSize(8).text('Este documento es un comprobante generado automáticamente por la plataforma AND.', { align: 'center', color: 'grey' });
+
+        doc.end();
+    });
   }
 }

@@ -7,7 +7,9 @@ import {
   Put,
   Patch,
   UseGuards,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -70,6 +72,14 @@ export class FacturacionController {
     return this.facturacionService.approveRequest(id, user.userId);
   }
 
+  @ApiOperation({ summary: '5. Empresa realiza el pago' })
+  @ApiResponse({ status: 200, description: 'Pagado' })
+  @Roles(UserRole.EMPRESA)
+  @Patch(':id/pay')
+  payRequest(@Param('id') id: string, @GetUser() user: any) {
+    return this.facturacionService.payRequest(id, user.userId);
+  }
+
   // --- ADMIN ---
 
   @ApiOperation({ summary: 'Listar todas las solicitudes (Admin)' })
@@ -77,6 +87,13 @@ export class FacturacionController {
   @Roles(UserRole.ADMIN)
   getAllRequests() {
     return this.facturacionService.findAll();
+  }
+
+  @ApiOperation({ summary: '2. Admin calcula y envía (simulado con calculate)' })
+  @Patch(':id/calculate')
+  @Roles(UserRole.ADMIN)
+  calculateRequest(@Param('id') id: string, @GetUser() user: any) {
+    return this.facturacionService.calculateRequest(id);
   }
 
   @ApiOperation({ summary: '4. Admin emite factura' })
@@ -98,5 +115,20 @@ export class FacturacionController {
   @Roles(UserRole.ADMIN)
   completeOrder(@Param('id') id: string, @GetUser() user: any) {
     return this.facturacionService.completeOrder(id, user.userId);
+  }
+
+  @ApiOperation({ summary: 'Descargar Factura PDF' })
+  @Roles(UserRole.EMPRESA, UserRole.ADMIN)
+  @Get(':id/pdf')
+  async downloadPdf(@Param('id') id: string, @Res() res: Response) {
+      const buffer = await this.facturacionService.generateInvoicePdf(id);
+      
+      res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="factura-${id}.pdf"`,
+        'Content-Length': buffer.length,
+      });
+
+      res.end(buffer);
   }
 }
