@@ -91,11 +91,17 @@ export class FacturacionService {
         throw new NotFoundException('Solicitud no encontrada');
     }
 
+
+    // Nuevo cálculo según imagen:
+    // Costo Base: monto solicitado
+    // ISD: 0
+    // IVA: 15% del monto solicitado
+    // Inversión Neta: monto solicitado + IVA
     const montoSolicitado = parseFloat(request.monto_solicitado);
-    const baseCalculada = montoSolicitado / 1.12; 
-    const iva = baseCalculada * 0.12;
-    const isd = montoSolicitado * 0.05; 
-    const totalFacturado = montoSolicitado;
+    const baseCalculada = montoSolicitado;
+    const isd = 0;
+    const iva = montoSolicitado * 0.15;
+    const totalFacturado = montoSolicitado + iva;
 
     const { data: updated, error: updateError } = await localClient
       .from('facturacion_requests')
@@ -202,9 +208,12 @@ export class FacturacionService {
     
     // Mapeo seguro para el frontend
     return data.map(req => ({
-        ...req,
-        monto: req.total_facturado ? parseFloat(req.total_facturado) : parseFloat(req.monto_solicitado),
-        fecha: req.created_at
+      ...req,
+      monto: req.total_facturado ? parseFloat(req.total_facturado) : parseFloat(req.monto_solicitado),
+      iva: req.iva ? parseFloat(req.iva) : req.monto_solicitado * 0.15,
+      isd: 0,
+      inversion_neta: req.total_facturado ? parseFloat(req.total_facturado) : parseFloat(req.monto_solicitado) * 1.15,
+      fecha: req.created_at
     }));
   }
 
@@ -232,7 +241,14 @@ export class FacturacionService {
         throw error;
     }
 
-    return data;
+    return data.map(req => ({
+      ...req,
+      monto: req.total_facturado ? parseFloat(req.total_facturado) : parseFloat(req.monto_solicitado),
+      iva: req.iva ? parseFloat(req.iva) : req.monto_solicitado * 0.15,
+      isd: 0,
+      inversion_neta: req.total_facturado ? parseFloat(req.total_facturado) : parseFloat(req.monto_solicitado) * 1.15,
+      fecha: req.created_at
+    }));
   }
 
   private async validateOwnership(requestId: string, userId: string) {
@@ -439,7 +455,7 @@ export class FacturacionService {
 
       // Métricas financieras
       const monto = parseFloat(req.total_facturado || req.monto_solicitado || 0);
-      const isd = parseFloat(req.isd_evitado || 0);
+      const isd = 0;
 
       // Current Month
       if (m === currentMonth && y === currentYear) {
@@ -510,13 +526,15 @@ export class FacturacionService {
         id: req.id,
         plataforma: req.plataforma,
         monto: req.total_facturado ? parseFloat(req.total_facturado) : parseFloat(req.monto_solicitado),
+        iva: req.iva ? parseFloat(req.iva) : req.monto_solicitado * 0.15,
+        isd: 0,
+        inversion_neta: req.total_facturado ? parseFloat(req.total_facturado) : parseFloat(req.monto_solicitado) * 1.15,
         estado: req.estado,
         fecha: req.created_at,
-        // Campos legacy o raw por si acaso
         monto_solicitado: req.monto_solicitado,
         total_facturado: req.total_facturado,
         created_at: req.created_at
-    }));
+      }));
 
     return {
       summary: {
@@ -554,97 +572,208 @@ export class FacturacionService {
   async generateInvoicePdf(requestId: string): Promise<Buffer> {
     const PDFDocument = require('pdfkit');
     const localClient = this.getLocalClient();
-    
+
     // 1. Obtener datos
+
+    // Traer request y empresa
     const { data: request, error } = await localClient
       .from('facturacion_requests')
       .select('*, empresas(*)')
       .eq('id', requestId)
       .single();
 
-    if (error || !request) {
-        throw new NotFoundException('Factura no encontrada');
+    // Traer correo real del usuario creador desde auth.users
+    let userEmail = null;
+    if (request?.created_by) {
+      // Consulta a la vista pública user_emails (debes crearla en tu DB)
+      const { data: userEmailData } = await localClient
+        .from('user_emails')
+        .select('email')
+        .eq('id', request.created_by)
+        .single();
+      userEmail = userEmailData?.email || null;
     }
 
-    if (!request.total_facturado && request.estado !== FacturacionEstado.INVOICED && request.estado !== FacturacionEstado.PAID && request.estado !== FacturacionEstado.COMPLETED) {
-        // Permitir descargar proforma o throw error?
-        // Asumiremos que solo se descarga si ya se calculó o emitió
-        if (request.estado === FacturacionEstado.REQUEST_CREATED) {
-            throw new BadRequestException('La solicitud aún no ha sido procesada.');
-        }
+    if (error || !request) {
+      throw new NotFoundException('Factura no encontrada');
     }
+
+    if (
+      !request.total_facturado &&
+      request.estado !== FacturacionEstado.INVOICED &&
+      request.estado !== FacturacionEstado.PAID &&
+      request.estado !== FacturacionEstado.COMPLETED
+    ) {
+      if (request.estado === FacturacionEstado.REQUEST_CREATED) {
+        throw new BadRequestException('La solicitud aún no ha sido procesada.');
+      }
+    }
+
+    const formatCurrency = (v: any) => {
+      const n = parseFloat(v || 0);
+      return `$ ${n.toFixed(2)}`;
+    };
 
     return new Promise((resolve, reject) => {
-        const doc = new PDFDocument({ size: 'A4', margin: 50 });
-        const buffers: Buffer[] = [];
+      const doc = new PDFDocument({ size: 'A4', margin: 48 });
+      const buffers: Buffer[] = [];
 
-        doc.on('data', buffers.push.bind(buffers));
-        doc.on('end', () => {
-            const pdfData = Buffer.concat(buffers);
-            resolve(pdfData);
-        });
-        doc.on('error', reject);
+      doc.on('data', buffers.push.bind(buffers));
+      doc.on('end', () => resolve(Buffer.concat(buffers)));
+      doc.on('error', reject);
 
-        // --- CONTENIDO PDF ---
-        
-        // Header
-        doc.fontSize(20).text('AND - Factura Electrónica', { align: 'center' });
-        doc.moveDown();
-        doc.fontSize(12).text(`ID Solicitud: ${request.id}`, { align: 'right' });
-        doc.text(`Fecha Emisión: ${new Date().toLocaleDateString()}`, { align: 'right' });
-        
-        doc.moveDown();
-        doc.text(`Estado: ${request.estado.toUpperCase()}`, { align: 'right' });
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+      const margin = 48;
+      let yCursor = margin;
 
-        doc.moveDown();
-        
-        // Datos Empresa
-        doc.fontSize(14).text('Datos del Cliente:', { underline: true });
-        doc.fontSize(10);
-        doc.text(`Razón Social: ${request.empresas?.razon_social || 'N/A'}`);
-        doc.text(`RUC: ${request.empresas?.ruc || 'N/A'}`);
-        doc.text(`Dirección: ${request.empresas?.direccion || request.empresas?.ciudad || 'N/A'}`);
-        doc.text(`Email: ${request.empresas?.correo || 'N/A'}`);
+      // --- MARCA DE AGUA (encapsulada para no afectar el resto) ---
+      try {
+        doc.save();
+        doc.opacity(0.08);
+        doc.font('Helvetica-Bold');
+        doc.fontSize(80);
+        doc.rotate(-45, { origin: [pageWidth / 2, pageHeight / 2] });
+        doc.text('AND', pageWidth / 2 - 200, pageHeight / 2 - 40, { align: 'center' });
+        doc.rotate(45, { origin: [pageWidth / 2, pageHeight / 2] });
+        doc.restore();
+      } catch (e) {
+        // In case opacity/rotate not available, ignore watermark error
+      }
 
-        doc.moveDown(2);
+      // --- HEADER corporativo ---
+      // Logo box
+      doc.save();
+      doc.rect(margin, yCursor, 120, 48).fill('#0b3d91');
+      doc.fillColor('white').font('Helvetica-Bold').fontSize(18).text('AND', margin + 12, yCursor + 10);
+      doc.font('Helvetica').fontSize(8).text('Advanced Network & Delivery', margin + 12, yCursor + 32);
+      doc.restore();
 
-        // Tabla de Valores
-        doc.fontSize(14).text('Detalle de Facturación:', { underline: true });
-        doc.moveDown();
+      // Invoice meta (right)
+      // Ajuste: bloque meta separado del borde derecho
+      const metaBlockWidth = 280;
+      const rightX = pageWidth - margin - metaBlockWidth;
+      doc.font('Helvetica-Bold').fillColor('black').fontSize(18).text('FACTURA', rightX, yCursor + 6, { width: metaBlockWidth, align: 'right' });
+      doc.font('Helvetica').fontSize(9).text(`N°: ${request.id}`, rightX, yCursor + 30, { width: metaBlockWidth, align: 'right' });
+      doc.text(`Fecha: ${new Date().toLocaleDateString()}`, rightX, yCursor + 44, { width: metaBlockWidth, align: 'right' });
+      doc.text(`Estado: ${request.estado}`, rightX, yCursor + 58, { width: metaBlockWidth, align: 'right' });
 
-        const tableTop = doc.y;
-        const itemX = 50;
-        const amountX = 400;
+      yCursor += 80;
 
-        doc.fontSize(10);
-        
-        // Header Tabla
-        doc.text('Concepto', itemX, tableTop, { bold: true });
-        doc.text('Monto (USD)', amountX, tableTop, { bold: true });
-        
-        let y = tableTop + 20;
-        
-        // Rows
-        const rows = [
-            { label: 'Monto Solicitado (Recarga)', value: request.monto_solicitado },
-            { label: 'Base Imponible', value: request.base_calculada },
-            { label: 'IVA (12%)', value: request.iva },
-            { label: 'Total Facturado', value: request.total_facturado }
-        ];
+      // --- Cliente / Empresa ---
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('black').text('Facturar a:', margin, yCursor);
+      doc.font('Helvetica').fontSize(10).text(`${request.empresas?.razon_social || 'N/A'}`, margin, yCursor + 18);
+      doc.text(`RUC: ${request.empresas?.ruc || 'N/A'}`, margin, yCursor + 34);
+      doc.text(`Dirección: ${request.empresas?.direccion || request.empresas?.ciudad || 'N/A'}`, margin, yCursor + 50);
+      doc.text(`Email: ${userEmail || request.empresas?.correo || 'N/A'}`, margin, yCursor + 66);
 
-        rows.forEach(row => {
-            if (row.value) {
-                doc.text(row.label, itemX, y);
-                doc.text(`$ ${parseFloat(row.value.toString()).toFixed(2)}`, amountX, y);
-                y += 20;
-            }
-        });
+      // Company info block on right
+      doc.font('Helvetica-Bold').fontSize(9).text('AND CORPORATE', pageWidth - margin - 180, yCursor);
+      doc.font('Helvetica').fontSize(8).text('Av. Corporativa 1234, Lima, Perú', pageWidth - margin - 180, yCursor + 16);
+      doc.text('contacto@and.company | +51 1 234 5678', pageWidth - margin - 180, yCursor + 30);
 
-        // Footer
-        doc.moveDown(4);
-        doc.fontSize(8).text('Este documento es un comprobante generado automáticamente por la plataforma AND.', { align: 'center', color: 'grey' });
+      yCursor += 110;
 
-        doc.end();
+      // Line separator
+      doc.moveTo(margin, yCursor - 8).lineTo(pageWidth - margin, yCursor - 8).stroke('#eeeeee');
+
+      // --- Tabla de conceptos ---
+      // Siguiendo layout sugerido: columnas numéricas con ancho fijo para garantizar alineación
+      const contentWidth = pageWidth - margin * 2;
+      const colWidth = 70;
+      const gap = 10;
+
+      // Posiciones X calculadas de derecha a izquierda
+      const totalX = pageWidth - margin - colWidth;
+      const priceX = totalX - colWidth - gap;
+      const qtyX = priceX - colWidth - gap;
+
+      // Descripción ocupa el resto
+      const itemX = margin;
+      const descWidth = qtyX - itemX - gap;
+
+      doc.font('Helvetica-Bold').fontSize(10);
+      doc.text('Descripción', itemX, yCursor);
+      doc.text('Monto', qtyX, yCursor, { width: colWidth, align: 'right' });
+      doc.text('Impuesto', priceX, yCursor, { width: colWidth, align: 'right' });
+      doc.text('Total', totalX, yCursor, { width: colWidth, align: 'right' });
+
+      yCursor += 22;
+      doc.moveTo(margin, yCursor - 6).lineTo(pageWidth - margin, yCursor - 6).stroke('#cccccc');
+
+      doc.font('Helvetica').fontSize(10);
+
+      const rows = [
+        { label: 'Monto Solicitado (Recarga)', value: request.monto_solicitado || 0 },
+        { label: 'Base Imponible', value: request.base_calculada || 0 },
+        { label: 'IVA (15%)', value: request.iva || 0 },
+      ];
+
+      function ensureSpace(requiredHeight = 36) {
+        const footerReserve = 140;
+        if (yCursor + requiredHeight > pageHeight - margin - footerReserve) {
+          doc.addPage();
+          yCursor = margin;
+          // Re-draw header on new page minimal (logo + title area)
+          doc.font('Helvetica-Bold').fontSize(16).text('FACTURA (continuación)', margin, yCursor);
+          yCursor += 24;
+        }
+      }
+
+      rows.forEach((row) => {
+        // Preparar opciones para descripción y medir altura
+        const descOptions = { width: descWidth, align: 'left' };
+        doc.font('Helvetica').fontSize(10);
+        const descHeight = doc.heightOfString(String(row.label), descOptions);
+        const lineHeight = 18;
+        const rowHeight = Math.max(descHeight, lineHeight);
+
+        // Asegurar espacio según altura dinámica
+        ensureSpace(rowHeight + 10);
+
+        // Escribir campos
+        doc.text(row.label, itemX, yCursor, descOptions);
+        doc.text(formatCurrency(row.value), qtyX, yCursor, { width: colWidth, align: 'right' });
+        if (row.label.includes('IVA')) {
+          doc.text(formatCurrency(row.value), priceX, yCursor, { width: colWidth, align: 'right' });
+        } else {
+          doc.text('-', priceX, yCursor, { width: colWidth, align: 'right' });
+        }
+        doc.text(formatCurrency(row.value), totalX, yCursor, { width: colWidth, align: 'right' });
+
+        // Avanzar cursor (alto dinámico + padding)
+        yCursor += rowHeight + 10;
+      });
+
+      // Totales block (right)
+      ensureSpace(80);
+      const totalsBlockWidth = 200;
+      const totalsX = pageWidth - margin - totalsBlockWidth;
+      const totalsY = yCursor + 8;
+
+      doc.save();
+      doc.rect(totalsX, totalsY - 6, totalsBlockWidth, 40).fill('#0b3d91');
+      doc.fillColor('white').font('Helvetica-Bold').fontSize(12).text('TOTAL', totalsX + 12, totalsY, { align: 'left' });
+      doc.font('Helvetica-Bold').fontSize(12).text(formatCurrency(request.total_facturado || request.monto_solicitado || 0), totalsX + 12, totalsY + 18, { align: 'left' });
+      doc.restore();
+
+      yCursor = totalsY + 60;
+
+      // --- Notas / Pie ---
+      ensureSpace(6);
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('black').text('Notas:', margin, yCursor);
+      doc.font('Helvetica').fontSize(8).text('Esta factura fue generada por AND. Conserva este comprobante para efectos contables.', margin, yCursor + 16, {
+        width: pageWidth - margin * 2 - 20,
+      });
+
+      yCursor += 60;
+      doc.fontSize(9).text('__________________________', pageWidth - margin - 220, yCursor);
+      doc.text('Firma Autorizada', pageWidth - margin - 180, yCursor + 14);
+
+      // Small legal footer
+      doc.fontSize(7).fillColor('grey').text('AND © ' + new Date().getFullYear() + ' • Documento generado electrónicamente.', margin, pageHeight - margin - 20, { align: 'center', width: pageWidth - margin * 2 });
+
+      doc.end();
     });
   }
 }
