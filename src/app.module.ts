@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { EmpresasModule } from './empresas/empresas.module';
 import { FacturacionModule } from './facturacion/facturacion.module';
 import { GamificacionModule } from './gamificacion/gamificacion.module';
+import { SocketModule } from './socket/socket.module';
 import { SupabaseModule } from './supabase/supabase.module'; 
 
 @Module({
@@ -15,6 +16,7 @@ import { SupabaseModule } from './supabase/supabase.module';
     EmpresasModule,
     FacturacionModule,
     GamificacionModule,
+    SocketModule,
     SupabaseModule, // Importar SupabaseModule para usar SupabaseService en AppService
   ],
   controllers: [AppController],

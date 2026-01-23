@@ -4,6 +4,7 @@ import { SupabaseService } from '../supabase/supabase.service';
 import { CreateRequestDto, FacturacionEstado } from './dto/create-request.dto';
 import { DashboardStatsResponse } from './dto/dashboard-stats.dto';
 import { GamificacionService } from '../gamificacion/gamificacion.service';
+import { SocketService } from '../socket/socket.service';
 
 @Injectable()
 export class FacturacionService {
@@ -11,6 +12,7 @@ export class FacturacionService {
     private supabase: SupabaseService,
     private gamificacion: GamificacionService,
     private configService: ConfigService,
+    private socketService: SocketService,
   ) {}
 
   private getLocalClient() {
@@ -67,6 +69,9 @@ export class FacturacionService {
         console.error('Error insertando request:', error);
         throw new BadRequestException('Error al crear la solicitud: ' + error.message);
     }
+
+    // 🔔 Notificar a Admins
+    this.socketService.notifyAdmins('billing:new-request', data);
 
     // 2. AND calcula el monto final (Manual por Admin)
     // return await this.calculateRequest(data.id);
@@ -276,6 +281,14 @@ export class FacturacionService {
       .single();
 
     if (error) throw error;
+
+    // 🔔 Notificaciones
+    // 1. Al dueño de la solicitud
+    if (data.created_by) {
+      this.socketService.notifyUser(data.created_by, 'billing:status-changed', data);
+    }
+    // 2. A todos los admins (para actualizar tablas en tiempo real)
+    this.socketService.notifyAdmins('billing:update', data);
 
     await this.createAuditLog(requestId, oldEstado, nuevoEstado, actorId);
     return data;
