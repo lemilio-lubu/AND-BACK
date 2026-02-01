@@ -1,7 +1,7 @@
 name: Deploy NestJS
 on:
   push:
-    branches: [ main ] # Se activa cuando haces push a main
+    branches: [ master ] # Se activa cuando haces push a main
 
 jobs:
   deploy:
