@@ -1,0 +1,34 @@
+name: Deploy NestJS
+on:
+  push:
+    branches: [ main ] # Se activa cuando haces push a main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy files to EC2
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "."
+          target: "/home/ubuntu/app/backend"
+
+      - name: Install and Build on EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /home/ubuntu/app/backend
+            npm install
+            npm run build
+            # Copiamos el env que creaste manualmente en el paso 3
+            cp /home/ubuntu/app/.env.back .env 
+            # Reiniciamos con PM2
+            pm2 restart nest-api || pm2 start dist/main.js --name "nest-api"
